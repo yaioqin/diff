@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch
 import numpy as np
 
-from model import RL_Policy, Semantic_Mapping,Semantic_Mapping_V2
+from model import RL_Policy, Semantic_Mapping
 from utils.storage import GlobalRolloutStorage
 from envs import make_vec_envs
 from arguments import get_args
@@ -22,7 +22,6 @@ def main():
 
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    
 
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
@@ -82,7 +81,7 @@ def main():
     # Starting environments
     torch.set_num_threads(1)
     envs = make_vec_envs(args)
-    obs,obs2, infos = envs.reset()
+    obs, infos = envs.reset()
 
     torch.set_grad_enabled(False)
 
@@ -94,7 +93,6 @@ def main():
     # 4. Past Agent Locations
     # 5,6,7,.. : Semantic Categories
     nc = args.num_sem_categories + 4  # num channels
-    nc2 = args.max_labels_count +1 + 4
 
     # Calculating full and local map sizes
     map_size = args.map_size_cm // args.map_resolution
@@ -105,9 +103,6 @@ def main():
     # Initializing full and local map
     full_map = torch.zeros(num_scenes, nc, full_w, full_h).float().to(device)
     local_map = torch.zeros(num_scenes, nc, local_w,
-                            local_h).float().to(device)
-    full_map2 = torch.zeros(num_scenes, nc2, full_w, full_h).float().to(device)
-    local_map2 = torch.zeros(num_scenes, nc2, local_w,
                             local_h).float().to(device)
 
     # Initial full and local pose
@@ -149,7 +144,6 @@ def main():
 
     def init_map_and_pose():
         full_map.fill_(0.)
-        full_map2.fill_(0.)
         full_pose.fill_(0.)
         full_pose[:, :2] = args.map_size_cm / 100.0 / 2.0
 
@@ -161,7 +155,6 @@ def main():
                             int(c * 100.0 / args.map_resolution)]
 
             full_map[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.0
-            full_map2[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.0
 
             lmb[e] = get_local_map_boundaries((loc_r, loc_c),
                                               (local_w, local_h),
@@ -175,18 +168,11 @@ def main():
             local_map[e] = full_map[e, :,
                                     lmb[e, 0]:lmb[e, 1],
                                     lmb[e, 2]:lmb[e, 3]]
-            local_map2[e] = full_map2[e, :,
-                                    lmb[e, 0]:lmb[e, 1],
-                                    lmb[e, 2]:lmb[e, 3]]
             local_pose[e] = full_pose[e] - \
                 torch.from_numpy(origins[e]).to(device).float()
-        
-
-            
 
     def init_map_and_pose_for_env(e):
         full_map[e].fill_(0.)
-        full_map2[e].fill_(0.)
         full_pose[e].fill_(0.)
         full_pose[e, :2] = args.map_size_cm / 100.0 / 2.0
 
@@ -197,7 +183,6 @@ def main():
                         int(c * 100.0 / args.map_resolution)]
 
         full_map[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.0
-        full_map2[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.0
 
         lmb[e] = get_local_map_boundaries((loc_r, loc_c),
                                           (local_w, local_h),
@@ -208,7 +193,6 @@ def main():
                       lmb[e][0] * args.map_resolution / 100.0, 0.]
 
         local_map[e] = full_map[e, :, lmb[e, 0]:lmb[e, 1], lmb[e, 2]:lmb[e, 3]]
-        local_map2[e] = full_map2[e, :, lmb[e, 0]:lmb[e, 1], lmb[e, 2]:lmb[e, 3]]
         local_pose[e] = full_pose[e] - \
             torch.from_numpy(origins[e]).to(device).float()
 
@@ -216,8 +200,6 @@ def main():
         prev_explored_area = full_map[e, 1].sum(1).sum(0)
         full_map[e, :, lmb[e, 0]:lmb[e, 1], lmb[e, 2]:lmb[e, 3]] = \
             local_map[e]
-        full_map2[e, :, lmb[e, 0]:lmb[e, 1], lmb[e, 2]:lmb[e, 3]] = \
-            local_map2[e]
         curr_explored_area = full_map[e, 1].sum(1).sum(0)
         intrinsic_rews[e] = curr_explored_area - prev_explored_area
         intrinsic_rews[e] *= (args.map_resolution / 100.)**2  # to m^2
@@ -242,9 +224,6 @@ def main():
     # Semantic Mapping
     sem_map_module = Semantic_Mapping(args).to(device)
     sem_map_module.eval()
-
-    sem_map_module2 = Semantic_Mapping_V2(args).to(device)
-    sem_map_module2.eval()
 
     # Global policy
     g_policy = RL_Policy(g_observation_space.shape, g_action_space,
@@ -285,9 +264,6 @@ def main():
 
     _, local_map, _, local_pose = \
         sem_map_module(obs, poses, local_map, local_pose)
-    
-    _, local_map2, _, _ = \
-        sem_map_module2(obs2, poses, local_map2, local_pose)
 
     # Compute Global policy input
     locs = local_pose.cpu().numpy()
@@ -300,7 +276,6 @@ def main():
                         int(c * 100.0 / args.map_resolution)]
 
         local_map[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.
-        local_map2[e, 2:4, loc_r - 1:loc_r + 2, loc_c - 1:loc_c + 2] = 1.
         global_orientation[e] = int((locs[e, 2] + 180.0) / 5.)
 
     global_input[:, 0:4, :, :] = local_map[:, 0:4, :, :].detach()
@@ -343,8 +318,6 @@ def main():
     for e, p_input in enumerate(planner_inputs):
         p_input['map_pred'] = local_map[e, 0, :, :].cpu().numpy()
         p_input['exp_pred'] = local_map[e, 1, :, :].cpu().numpy()
-        p_input['map_pred_2'] = local_map2[e, 0, :, :].cpu().numpy()
-        p_input['exp_pred_2'] = local_map2[e, 1, :, :].cpu().numpy()
         p_input['pose_pred'] = planner_pose_inputs[e]
         p_input['goal'] = goal_maps[e]  # global_goals[e]
         p_input['new_goal'] = 1
@@ -354,11 +327,8 @@ def main():
             local_map[e, -1, :, :] = 1e-5
             p_input['sem_map_pred'] = local_map[e, 4:, :, :
                                                 ].argmax(0).cpu().numpy()
-            local_map2[e, -1, :, :] = 1e-5
-            p_input['sem_map_pred_2'] = local_map2[e, 4:, :, :
-                                                ].argmax(0).cpu().numpy()
 
-    obs, obs2,_, done, infos = envs.plan_act_and_preprocess(planner_inputs)
+    obs, _, done, infos = envs.plan_act_and_preprocess(planner_inputs)
 
     start = time.time()
     g_reward = 0
@@ -394,7 +364,7 @@ def main():
                     if len(episode_success[e]) == num_episodes:
                         finished[e] = 1
                 else:
-                    episode_success.append(success) 
+                    episode_success.append(success)
                     episode_spl.append(spl)
                     episode_dist.append(dist)
                 wait_env[e] = 1.
@@ -411,19 +381,15 @@ def main():
 
         _, local_map, _, local_pose = \
             sem_map_module(obs, poses, local_map, local_pose)
-        _, local_map2, _, _ = \
-            sem_map_module2(obs2, poses, local_map2, local_pose)
 
         locs = local_pose.cpu().numpy()
         planner_pose_inputs[:, :3] = locs + origins
         local_map[:, 2, :, :].fill_(0.)  # Resetting current location channel
-        local_map2[:, 2, :, :].fill_(0.)  # Resetting current location channel
         for e in range(num_scenes):
             r, c = locs[e, 1], locs[e, 0]
             loc_r, loc_c = [int(r * 100.0 / args.map_resolution),
                             int(c * 100.0 / args.map_resolution)]
             local_map[e, 2:4, loc_r - 2:loc_r + 3, loc_c - 2:loc_c + 3] = 1.
-            local_map2[e, 2:4, loc_r - 2:loc_r + 3, loc_c - 2:loc_c + 3] = 1.
 
         # ------------------------------------------------------------------
 
@@ -439,8 +405,6 @@ def main():
 
                 full_map[e, :, lmb[e, 0]:lmb[e, 1], lmb[e, 2]:lmb[e, 3]] = \
                     local_map[e]
-                full_map2[e, :, lmb[e, 0]:lmb[e, 1], lmb[e, 2]:lmb[e, 3]] = \
-                    local_map2[e]
                 full_pose[e] = local_pose[e] + \
                     torch.from_numpy(origins[e]).to(device).float()
 
@@ -458,9 +422,6 @@ def main():
                               lmb[e][0] * args.map_resolution / 100.0, 0.]
 
                 local_map[e] = full_map[e, :,
-                                        lmb[e, 0]:lmb[e, 1],
-                                        lmb[e, 2]:lmb[e, 3]]
-                local_map2[e] = full_map2[e, :,
                                         lmb[e, 0]:lmb[e, 1],
                                         lmb[e, 2]:lmb[e, 3]]
                 local_pose[e] = full_pose[e] - \
@@ -554,8 +515,6 @@ def main():
         for e, p_input in enumerate(planner_inputs):
             p_input['map_pred'] = local_map[e, 0, :, :].cpu().numpy()
             p_input['exp_pred'] = local_map[e, 1, :, :].cpu().numpy()
-            p_input['map_pred_2'] = local_map2[e, 0, :, :].cpu().numpy()
-            p_input['exp_pred_2'] = local_map2[e, 1, :, :].cpu().numpy()
             p_input['pose_pred'] = planner_pose_inputs[e]
             p_input['goal'] = goal_maps[e]  # global_goals[e]
             p_input['new_goal'] = l_step == args.num_local_steps - 1
@@ -565,11 +524,8 @@ def main():
                 local_map[e, -1, :, :] = 1e-5
                 p_input['sem_map_pred'] = local_map[e, 4:, :,
                                                     :].argmax(0).cpu().numpy()
-                local_map2[e, -1, :, :] = 1e-5
-                p_input['sem_map_pred_2'] = local_map2[e, 4:, :,
-                                                    :].argmax(0).cpu().numpy()
 
-        obs, obs2,_, done, infos = envs.plan_act_and_preprocess(planner_inputs)
+        obs, _, done, infos = envs.plan_act_and_preprocess(planner_inputs)
         # ------------------------------------------------------------------
 
         # ------------------------------------------------------------------
